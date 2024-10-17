@@ -1,0 +1,75 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - name: qu-ci-cd
+    value: 'main'
+  - name: qu-ci-cd
+    value: 'SNE_DEV'
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+    
+  - bash: |
+      # Hier kommt der Vergleichscode
+    displayName: 'Branches vergleichen und Unterschiede exportieren'
+
+- bash: |
+    # Branches abrufen
+    git fetch origin $sourceBranch $targetBranch
+
+    # Unterschiede in JSON-Dateien finden
+    diff_files=$(git diff origin/$sourceBranch..origin/$targetBranch --name-only -- '*.json')
+
+    # CSV-Header erstellen
+    echo "Dateiname,Status,Inhalt" > differences.csv
+
+    # Unterschiede analysieren und in CSV exportieren
+    for file in $diff_files; do
+      if [ -f "$file" ]; then
+        status="Geändert"
+        content=$(git diff origin/$sourceBranch..origin/$targetBranch -- "$file" | sed 's/"/"""/g')
+      else
+        status="Gelöscht"
+        content=$(git show origin/$sourceBranch:"$file" | sed 's/"/"""/g')
+      fi
+      echo "\"$file\",\"$status\",\"$content\"" >> differences.csv
+    done
+
+    # Neue Dateien finden und hinzufügen
+    new_files=$(git diff origin/$sourceBranch..origin/$targetBranch --name-only --diff-filter=A -- '*.json')
+    for file in $new_files; do
+      content=$(cat "$file" | sed 's/"/"""/g')
+      echo "\"$file\",\"Neu\",\"$content\"" >> differences.csv
+    done
+  displayName: 'Branches vergleichen und Unterschiede exportieren'
+
+  - task: UsePythonVersion@0
+  inputs:
+    versionSpec: '3.x'
+    addToPath: true
+
+- script: |
+    pip install pandas openpyxl
+  displayName: 'Install Python dependencies'
+
+- script: |
+    python -c "import pandas as pd; df = pd.read_csv('differences.csv'); df.to_excel('differences.xlsx', index=False)"
+  displayName: 'Convert CSV to XLSX'
+  - task: PublishBuildArtifacts@1
+  inputs:
+    pathToPublish: '$(System.DefaultWorkingDirectory)/differences.csv'
+    artifactName: 'branch-differences-csv'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    pathToPublish: '$(System.DefaultWorkingDirectory)/differences.xlsx'
+    artifactName: 'branch-differences-xlsx'
