@@ -34,9 +34,10 @@ pool:
 
 steps:
 - task: PowerShell@2
-  displayName: 'Generate and Download Branch Compare Excel'
   inputs:
     targetType: 'inline'
+    errorActionPreference: 'continue'
+    failOnStderr: false
     script: |
       $ErrorActionPreference = "Continue"
       $VerbosePreference = "Continue"
@@ -49,30 +50,43 @@ steps:
       try {
         Write-Log "Starting script execution"
         
-        # Verwenden der Parameter
-        $organization = "$(organization)"
-        $project = "$(project)"
-        $repository = "$(repository)"
-        $sourceBranch = "$(sourceBranch)"
-        $targetBranch = "$(targetBranch)"
+        # Debugging: Display all environment variables
+        Write-Log "Displaying all environment variables:"
+        Get-ChildItem Env: | Format-Table -AutoSize
+        
+        # Use environment variables
+        $organization = $env:ORGANIZATION
+        $project = $env:PROJECT
+        $repository = $env:REPOSITORY
+        $sourceBranch = $env:SOURCEBRANCH
+        $targetBranch = $env:TARGETBRANCH
         
         Write-Log "Parameters: Org=$organization, Project=$project, Repo=$repository, Source=$sourceBranch, Target=$targetBranch"
         
-        # Installieren und Importieren des ImportExcel-Moduls
+        Write-Log "Checking PowerShell version"
+        $PSVersionTable
+        
+        Write-Log "Checking execution policy"
+        Get-ExecutionPolicy
+        
+        Write-Log "Installing and importing ImportExcel module"
         Install-Module -Name ImportExcel -Force -Scope CurrentUser -ErrorAction Stop
         Import-Module ImportExcel -ErrorAction Stop
+        Write-Log "ImportExcel module installed and imported successfully"
         
-        # Authentifizierung und API-Aufrufe
-        $token = "$(System.AccessToken)"
+        Write-Log "Authenticating with Azure DevOps"
+        $token = $env:SYSTEM_ACCESSTOKEN
         $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$($token)"))
         
+        Write-Log "Fetching changed files"
         $orgUrl = "https://dev.azure.com/$organization"
         $url = "$orgUrl/$project/_apis/git/repositories/$repository/diffs/commits?baseVersion=$sourceBranch&targetVersion=$targetBranch&api-version=6.0"
         $response = Invoke-RestMethod -Uri $url -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method GET -ErrorAction Stop
         
         $changedFiles = $response.changes | Where-Object { $_.changeType -ne "Delete" } | Select-Object -ExpandProperty item
+        Write-Log "Number of changed files: $($changedFiles.Count)"
         
-        # Excel-Datei erstellen
+        Write-Log "Creating Excel workbook"
         $excelPackage = New-Object OfficeOpenXml.ExcelPackage
         $worksheet = $excelPackage.Workbook.Worksheets.Add("Changes")
         
@@ -116,12 +130,23 @@ steps:
             $row += 2
         }
         
-        $excelPath = "$(Build.ArtifactStagingDirectory)\BranchCompare.xlsx"
+        Write-Log "Saving Excel file"
+        $excelPath = "$env:BUILD_ARTIFACTSTAGINGDIRECTORY\BranchCompare.xlsx"
         $excelPackage.SaveAs($excelPath)
         
         Write-Log "Excel file saved to: $excelPath"
-
-        # Download der Excel-Datei
+      }
+      catch {
+        Write-Error "An error occurred: $_"
+        Write-Error "Stack Trace: $($_.ScriptStackTrace)"
+        throw $_
+      }
+      finally {
+        if ($null -ne $excelPackage) {
+          $excelPackage.Dispose()
+        }
+      }
+              # Download der Excel-Datei
         $downloadPath = "$(Build.SourcesDirectory)\DownloadedArtifacts"
         New-Item -ItemType Directory -Force -Path $downloadPath
 
@@ -134,22 +159,7 @@ steps:
             
             Write-Log "Downloading Excel file to: $downloadFilePath"
             Invoke-WebRequest -Uri $artifactUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -OutFile $downloadFilePath
-            
-            Write-Log "Excel file downloaded successfully"
-        } else {
-            Write-Error "Could not find or download the artifact."
-        }
-      }
-      catch {
-        Write-Error "An error occurred: $_"
-        Write-Error "Stack Trace: $($_.ScriptStackTrace)"
-        throw $_
-      }
-      finally {
-        if ($null -ne $excelPackage) {
-          $excelPackage.Dispose()
-        }
-      }
+        
 
 - task: PublishBuildArtifacts@1
   inputs:
