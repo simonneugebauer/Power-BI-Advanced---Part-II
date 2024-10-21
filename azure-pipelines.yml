@@ -11,7 +11,7 @@ parameters:
   default: 'main'
 - name: targetBranch
   type: string
-  default: 'develop'
+  default: 'QUNIS_Development'
 
 pool:
   vmImage: 'windows-latest'
