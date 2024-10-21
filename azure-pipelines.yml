@@ -21,6 +21,12 @@ parameters:
 - name: targetBranch
   type: string
   default: 'QUNIS_Development'
+- name: powerBIWorkspaceId
+  type: string
+  default: '0a51f6a1-10bf-4a17-a9e9-179f594dac21'
+- name: powerBIDataflowId
+  type: string
+  default: '7073bf72-26ab-43de-a817-cc6c80ca0236'
 
 variables:
   organization: ${{ parameters.organization }}
@@ -28,6 +34,8 @@ variables:
   repository: ${{ parameters.repository }}
   sourceBranch: ${{ parameters.sourceBranch }}
   targetBranch: ${{ parameters.targetBranch }}
+  powerBIWorkspaceId: ${{ parameters.powerBIWorkspaceId }}
+  powerBIDataflowId: ${{ parameters.powerBIDataflowId }}
 
 pool:
   vmImage: 'windows-latest'
@@ -60,6 +68,8 @@ steps:
         $repository = $env:REPOSITORY
         $sourceBranch = $env:SOURCEBRANCH
         $targetBranch = $env:TARGETBRANCH
+        $powerBIWorkspaceId = $env:POWERBIWORKSPACEID
+        $powerBIDataflowId = $env:POWERBIDATAFLOWID
         
         Write-Log "Parameters: Org=$organization, Project=$project, Repo=$repository, Source=$sourceBranch, Target=$targetBranch"
         
@@ -69,10 +79,12 @@ steps:
         Write-Log "Checking execution policy"
         Get-ExecutionPolicy
         
-        Write-Log "Installing and importing ImportExcel module"
+        Write-Log "Installing and importing required modules"
         Install-Module -Name ImportExcel -Force -Scope CurrentUser -ErrorAction Stop
+        Install-Module -Name MicrosoftPowerBIMgmt -Force -Scope CurrentUser -ErrorAction Stop
         Import-Module ImportExcel -ErrorAction Stop
-        Write-Log "ImportExcel module installed and imported successfully"
+        Import-Module MicrosoftPowerBIMgmt -ErrorAction Stop
+        Write-Log "Modules installed and imported successfully"
         
         Write-Log "Authenticating with Azure DevOps"
         $token = $env:SYSTEM_ACCESSTOKEN
@@ -91,6 +103,7 @@ steps:
         $worksheet = $excelPackage.Workbook.Worksheets.Add("Changes")
         
         $row = 1
+        $dataflowData = @()
         foreach ($file in $changedFiles) {
             Write-Log "Processing file: $($file.path)"
             $sourceUrl = "$orgUrl/$project/_apis/git/repositories/$repository/items?path=$($file.path)&versionDescriptor.version=$sourceBranch&api-version=6.0"
@@ -128,6 +141,13 @@ steps:
             }
             
             $row += 2
+
+            # Prepare data for Power BI Dataflow
+            $dataflowData += @{
+                FilePath = $file.path
+                SourceContent = $sourceContent
+                TargetContent = $targetContent
+            }
         }
         
         Write-Log "Saving Excel file"
@@ -141,6 +161,16 @@ steps:
         $localPath = "C:\BranchCompare.xlsx"
         Copy-Item -Path $excelPath -Destination $localPath -Force
         Write-Log "Excel file downloaded to: $localPath"
+
+        # Write data to Power BI Dataflow
+        Write-Log "Writing data to Power BI Dataflow"
+        Connect-PowerBIServiceAccount
+
+        foreach ($data in $dataflowData) {
+            Add-PowerBIDataflowRows -DataflowId $powerBIDataflowId -WorkspaceId $powerBIWorkspaceId -TableName "GitCompare" -Rows $data
+        }
+
+        Write-Log "Data written to Power BI Dataflow successfully"
       }
       catch {
         Write-Error "An error occurred: $_"
