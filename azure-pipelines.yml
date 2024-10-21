@@ -159,7 +159,7 @@ steps:
         # Export Excel to CSV
         Write-Log "Exporting Excel to CSV"
         $csvPath = "$env:BUILD_ARTIFACTSTAGINGDIRECTORY\BranchCompare.csv"
-        $data = Import-Excel -Path $excelPath -WorksheetName "Changes"
+        $data = Import-Excel -Path $excelPath -WorksheetName "Changes" -NoHeader
         $data | Export-Csv -Path $csvPath -NoTypeInformation
         Write-Log "CSV file exported to: $csvPath"
 
