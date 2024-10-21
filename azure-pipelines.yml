@@ -135,6 +135,12 @@ steps:
         $excelPackage.SaveAs($excelPath)
         
         Write-Log "Excel file saved to: $excelPath"
+
+        # Download the Excel file locally
+        Write-Log "Downloading Excel file locally"
+        $localPath = "C:\BranchCompare.xlsx"
+        Copy-Item -Path $excelPath -Destination $localPath -Force
+        Write-Log "Excel file downloaded to: $localPath"
       }
       catch {
         Write-Error "An error occurred: $_"
@@ -146,20 +152,6 @@ steps:
           $excelPackage.Dispose()
         }
       }
-              # Download der Excel-Datei
-        $downloadPath = "$(Build.SourcesDirectory)\DownloadedArtifacts"
-        New-Item -ItemType Directory -Force -Path $downloadPath
-
-        $downloadUrl = "$(System.CollectionUri)$(System.TeamProject)/_apis/build/builds/$(Build.BuildId)/artifacts?artifactName=BranchCompare&api-version=6.0"
-        $downloadResponse = Invoke-RestMethod -Uri $downloadUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method Get
-
-        if ($downloadResponse.resource.downloadUrl) {
-            $artifactUrl = $downloadResponse.resource.downloadUrl
-            $downloadFilePath = Join-Path $downloadPath "BranchCompare.xlsx"
-            
-            Write-Log "Downloading Excel file to: $downloadFilePath"
-            Invoke-WebRequest -Uri $artifactUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -OutFile $downloadFilePath
-        
 
 - task: PublishBuildArtifacts@1
   inputs:
