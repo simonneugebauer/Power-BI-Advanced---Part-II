@@ -1,0 +1,154 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger: none
+
+parameters:
+- name: organization
+  type: string
+  default: 'qunisgmbh'
+- name: project
+  type: string
+  default: 'QUNIS - Academy'
+- name: repository
+  type: string
+  default: 'QUNIS - Academy'
+- name: sourceBranch
+  type: string
+  default: 'main'
+- name: targetBranch
+  type: string
+  default: 'QUNIS_Development'
+
+variables:
+  organization: ${{ parameters.organization }}
+  project: ${{ parameters.project }}
+  repository: ${{ parameters.repository }}
+  sourceBranch: ${{ parameters.sourceBranch }}
+  targetBranch: ${{ parameters.targetBranch }}
+
+pool:
+  vmImage: 'windows-latest'
+
+steps:
+- task: PowerShell@2
+  inputs:
+    targetType: 'inline'
+    errorActionPreference: 'continue'
+    failOnStderr: false
+    script: |
+      $ErrorActionPreference = "Continue"
+      $VerbosePreference = "Continue"
+      
+      function Write-Log {
+          param([string]$message)
+          Write-Host "##[command]$message"
+      }
+      
+      try {
+        Write-Log "Starting script execution"
+        
+        # Debugging: Display all environment variables
+        Write-Log "Displaying all environment variables:"
+        Get-ChildItem Env: | Format-Table -AutoSize
+        
+        # Use environment variables
+        $organization = $env:ORGANIZATION
+        $project = $env:PROJECT
+        $repository = $env:REPOSITORY
+        $sourceBranch = $env:SOURCEBRANCH
+        $targetBranch = $env:TARGETBRANCH
+        
+        Write-Log "Parameters: Org=$organization, Project=$project, Repo=$repository, Source=$sourceBranch, Target=$targetBranch"
+        
+        Write-Log "Checking PowerShell version"
+        $PSVersionTable
+        
+        Write-Log "Checking execution policy"
+        Get-ExecutionPolicy
+        
+        Write-Log "Installing and importing ImportExcel module"
+        Install-Module -Name ImportExcel -Force -Scope CurrentUser -ErrorAction Stop
+        Import-Module ImportExcel -ErrorAction Stop
+        Write-Log "ImportExcel module installed and imported successfully"
+        
+        Write-Log "Authenticating with Azure DevOps"
+        $token = $env:SYSTEM_ACCESSTOKEN
+        $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$($token)"))
+        
+        Write-Log "Fetching changed files"
+        $orgUrl = "https://dev.azure.com/$organization"
+        $url = "$orgUrl/$project/_apis/git/repositories/$repository/diffs/commits?baseVersion=$sourceBranch&targetVersion=$targetBranch&api-version=6.0"
+        $response = Invoke-RestMethod -Uri $url -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method GET -ErrorAction Stop
+        
+        $changedFiles = $response.changes | Where-Object { $_.changeType -ne "Delete" } | Select-Object -ExpandProperty item
+        Write-Log "Number of changed files: $($changedFiles.Count)"
+        
+        Write-Log "Creating Excel workbook"
+        $excelPackage = New-Object OfficeOpenXml.ExcelPackage
+        $worksheet = $excelPackage.Workbook.Worksheets.Add("Changes")
+        
+        $row = 1
+        foreach ($file in $changedFiles) {
+            Write-Log "Processing file: $($file.path)"
+            $sourceUrl = "$orgUrl/$project/_apis/git/repositories/$repository/items?path=$($file.path)&versionDescriptor.version=$sourceBranch&api-version=6.0"
+            $targetUrl = "$orgUrl/$project/_apis/git/repositories/$repository/items?path=$($file.path)&versionDescriptor.version=$targetBranch&api-version=6.0"
+            
+            $sourceContent = Invoke-RestMethod -Uri $sourceUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method GET -ErrorAction Stop
+            $targetContent = Invoke-RestMethod -Uri $targetUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method GET -ErrorAction Stop
+            
+            $sourceLines = $sourceContent -split "`n"
+            $targetLines = $targetContent -split "`n"
+            
+            $worksheet.Cells[$row, 1].Value = "File: $($file.path)"
+            $worksheet.Cells[$row, 1, $row, 4].Merge = $true
+            $row++
+            
+            $worksheet.Cells[$row, 1].Value = "Source ($sourceBranch)"
+            $worksheet.Cells[$row, 3].Value = "Target ($targetBranch)"
+            $row++
+            
+            $maxLines = [Math]::Max($sourceLines.Count, $targetLines.Count)
+            for ($i = 0; $i -lt $maxLines; $i++) {
+                $worksheet.Cells[$row, 1].Value = $i + 1
+                $worksheet.Cells[$row, 2].Value = $sourceLines[$i]
+                $worksheet.Cells[$row, 3].Value = $i + 1
+                $worksheet.Cells[$row, 4].Value = $targetLines[$i]
+                
+                if ($sourceLines[$i] -ne $targetLines[$i]) {
+                    $worksheet.Cells[$row, 1, $row, 2].Style.Fill.PatternType = [OfficeOpenXml.Style.ExcelFillStyle]::Solid
+                    $worksheet.Cells[$row, 1, $row, 2].Style.Fill.BackgroundColor.SetColor([System.Drawing.Color]::LightPink)
+                    $worksheet.Cells[$row, 3, $row, 4].Style.Fill.PatternType = [OfficeOpenXml.Style.ExcelFillStyle]::Solid
+                    $worksheet.Cells[$row, 3, $row, 4].Style.Fill.BackgroundColor.SetColor([System.Drawing.Color]::LightGreen)
+                }
+                
+                $row++
+            }
+            
+            $row += 2
+        }
+        
+        Write-Log "Saving Excel file"
+        $excelPath = "$env:BUILD_ARTIFACTSTAGINGDIRECTORY\BranchCompare.xlsx"
+        $excelPackage.SaveAs($excelPath)
+        
+        Write-Log "Excel file saved to: $excelPath"
+      }
+      catch {
+        Write-Error "An error occurred: $_"
+        Write-Error "Stack Trace: $($_.ScriptStackTrace)"
+        throw $_
+      }
+      finally {
+        if ($null -ne $excelPackage) {
+          $excelPackage.Dispose()
+        }
+      }
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    pathToPublish: '$(Build.ArtifactStagingDirectory)'
+    artifactName: 'BranchCompare'
+  condition: succeededOrFailed()
