@@ -34,7 +34,7 @@ pool:
 
 steps:
 - task: PowerShell@2
-  displayName: 'Generate Branch Compare Excel'
+  displayName: 'Generate and Download Branch Compare Excel'
   inputs:
     targetType: 'inline'
     script: |
@@ -78,21 +78,67 @@ steps:
         
         $row = 1
         foreach ($file in $changedFiles) {
-            # Dateiinhalte abrufen und vergleichen
+            Write-Log "Processing file: $($file.path)"
             $sourceUrl = "$orgUrl/$project/_apis/git/repositories/$repository/items?path=$($file.path)&versionDescriptor.version=$sourceBranch&api-version=6.0"
             $targetUrl = "$orgUrl/$project/_apis/git/repositories/$repository/items?path=$($file.path)&versionDescriptor.version=$targetBranch&api-version=6.0"
             
             $sourceContent = Invoke-RestMethod -Uri $sourceUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method GET -ErrorAction Stop
             $targetContent = Invoke-RestMethod -Uri $targetUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method GET -ErrorAction Stop
             
-            # Excel-Datei befüllen
-            # (Rest des Excel-Erstellungscodes bleibt gleich)
+            $sourceLines = $sourceContent -split "`n"
+            $targetLines = $targetContent -split "`n"
+            
+            $worksheet.Cells[$row, 1].Value = "File: $($file.path)"
+            $worksheet.Cells[$row, 1, $row, 4].Merge = $true
+            $row++
+            
+            $worksheet.Cells[$row, 1].Value = "Source ($sourceBranch)"
+            $worksheet.Cells[$row, 3].Value = "Target ($targetBranch)"
+            $row++
+            
+            $maxLines = [Math]::Max($sourceLines.Count, $targetLines.Count)
+            for ($i = 0; $i -lt $maxLines; $i++) {
+                $worksheet.Cells[$row, 1].Value = $i + 1
+                $worksheet.Cells[$row, 2].Value = $sourceLines[$i]
+                $worksheet.Cells[$row, 3].Value = $i + 1
+                $worksheet.Cells[$row, 4].Value = $targetLines[$i]
+                
+                if ($sourceLines[$i] -ne $targetLines[$i]) {
+                    $worksheet.Cells[$row, 1, $row, 2].Style.Fill.PatternType = [OfficeOpenXml.Style.ExcelFillStyle]::Solid
+                    $worksheet.Cells[$row, 1, $row, 2].Style.Fill.BackgroundColor.SetColor([System.Drawing.Color]::LightPink)
+                    $worksheet.Cells[$row, 3, $row, 4].Style.Fill.PatternType = [OfficeOpenXml.Style.ExcelFillStyle]::Solid
+                    $worksheet.Cells[$row, 3, $row, 4].Style.Fill.BackgroundColor.SetColor([System.Drawing.Color]::LightGreen)
+                }
+                
+                $row++
+            }
+            
+            $row += 2
         }
         
         $excelPath = "$(Build.ArtifactStagingDirectory)\BranchCompare.xlsx"
         $excelPackage.SaveAs($excelPath)
         
         Write-Log "Excel file saved to: $excelPath"
+
+        # Download der Excel-Datei
+        $downloadPath = "$(Build.SourcesDirectory)\DownloadedArtifacts"
+        New-Item -ItemType Directory -Force -Path $downloadPath
+
+        $downloadUrl = "$(System.CollectionUri)$(System.TeamProject)/_apis/build/builds/$(Build.BuildId)/artifacts?artifactName=BranchCompare&api-version=6.0"
+        $downloadResponse = Invoke-RestMethod -Uri $downloadUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method Get
+
+        if ($downloadResponse.resource.downloadUrl) {
+            $artifactUrl = $downloadResponse.resource.downloadUrl
+            $downloadFilePath = Join-Path $downloadPath "BranchCompare.xlsx"
+            
+            Write-Log "Downloading Excel file to: $downloadFilePath"
+            Invoke-WebRequest -Uri $artifactUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -OutFile $downloadFilePath
+            
+            Write-Log "Excel file downloaded successfully"
+        } else {
+            Write-Error "Could not find or download the artifact."
+        }
       }
       catch {
         Write-Error "An error occurred: $_"
@@ -103,31 +149,6 @@ steps:
         if ($null -ne $excelPackage) {
           $excelPackage.Dispose()
         }
-      }
-
-- task: PowerShell@2
-  displayName: 'Download Branch Compare Excel'
-  inputs:
-    targetType: 'inline'
-    script: |
-      $downloadPath = "$(Build.SourcesDirectory)\DownloadedArtifacts"
-      New-Item -ItemType Directory -Force -Path $downloadPath
-
-      $url = "https://dev.azure.com/$(organization)/$(project)/_apis/build/builds/$(Build.BuildId)/artifacts?artifactName=BranchCompare&api-version=6.0"
-      $token = "$(System.AccessToken)"
-      $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$($token)"))
-
-      $artifactResponse = Invoke-RestMethod -Uri $url -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Method Get
-
-      if ($artifactResponse.resource.downloadUrl) {
-          $downloadUrl = $artifactResponse.resource.downloadUrl
-          $zipPath = Join-Path $downloadPath "artifact.zip"
-          Invoke-WebRequest -Uri $downloadUrl -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath $downloadPath -Force
-          Remove-Item $zipPath
-          Write-Host "Artefakt erfolgreich heruntergeladen und entpackt in: $downloadPath"
-      } else {
-          Write-Error "Konnte das Artefakt nicht finden oder herunterladen."
       }
 
 - task: PublishBuildArtifacts@1
