@@ -22,6 +22,12 @@ parameters:
   type: string
   default: 'QUNIS_Development'
 
+variables:
+  organization: ${{ parameters.organization }}
+  project: ${{ parameters.project }}
+  repository: ${{ parameters.repository }}
+  sourceBranch: ${{ parameters.sourceBranch }}
+  targetBranch: ${{ parameters.targetBranch }}
 
 pool:
   vmImage: 'windows-latest'
@@ -44,11 +50,16 @@ steps:
       try {
         Write-Log "Starting script execution"
         
-        $organization = "$(organization)"
-        $project = "$(project)"
-        $repository = "$(repository)"
-        $sourceBranch = "$(sourceBranch)"
-        $targetBranch = "$(targetBranch)"
+        # Debugging: Display all environment variables
+        Write-Log "Displaying all environment variables:"
+        Get-ChildItem Env: | Format-Table -AutoSize
+        
+        # Use environment variables
+        $organization = $env:ORGANIZATION
+        $project = $env:PROJECT
+        $repository = $env:REPOSITORY
+        $sourceBranch = $env:SOURCEBRANCH
+        $targetBranch = $env:TARGETBRANCH
         
         Write-Log "Parameters: Org=$organization, Project=$project, Repo=$repository, Source=$sourceBranch, Target=$targetBranch"
         
@@ -64,7 +75,7 @@ steps:
         Write-Log "ImportExcel module installed and imported successfully"
         
         Write-Log "Authenticating with Azure DevOps"
-        $token = "$(System.AccessToken)"
+        $token = $env:SYSTEM_ACCESSTOKEN
         $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$($token)"))
         
         Write-Log "Fetching changed files"
@@ -120,7 +131,7 @@ steps:
         }
         
         Write-Log "Saving Excel file"
-        $excelPath = "$(Build.ArtifactStagingDirectory)\BranchCompare.xlsx"
+        $excelPath = "$env:BUILD_ARTIFACTSTAGINGDIRECTORY\BranchCompare.xlsx"
         $excelPackage.SaveAs($excelPath)
         
         Write-Log "Excel file saved to: $excelPath"
